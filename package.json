@@ -22,5 +22,9 @@
     "ai"
   ],
   "author": "Fendaceng",
-  "license": "MIT"
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Hsi431/openclaw-hashline"
+  }
 }
