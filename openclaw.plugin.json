@@ -1,0 +1,13 @@
+{
+  "id": "hashline",
+  "name": "Hashline Plugin",
+  "description": "Adds line-hash based file anchoring (read + hashline_edit tool) for sub-agent file safety",
+  "version": "1.0.0",
+  "kind": "tool",
+  "main": "index.js",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

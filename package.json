@@ -1,0 +1,26 @@
+{
+  "name": "openclaw-hashline",
+  "version": "1.0.0",
+  "description": "讓 AI agent 改檔案時不再打錯字、改錯行 — 行級內容 hash 編輯 plugin for OpenClaw",
+  "type": "module",
+  "main": "index.js",
+  "files": [
+    "index.js",
+    "pi-tools.hashline.js",
+    "hashline-prompt.js",
+    "data/bigrams.json",
+    "openclaw.plugin.json"
+  ],
+  "keywords": [
+    "openclaw",
+    "plugin",
+    "hashline",
+    "hash",
+    "edit",
+    "agent",
+    "coding",
+    "ai"
+  ],
+  "author": "Fendaceng",
+  "license": "MIT"
+}
