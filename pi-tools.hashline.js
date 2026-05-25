@@ -657,14 +657,19 @@ var bigrams_default = [
 var textEncoder = new TextEncoder();
 var PRIME32_1 = 2654435761;
 var PRIME32_2 = 2246822519;
-var PRIME32_3 = 3266489909;
+var PRIME32_3 = 3266489917;
 var PRIME32_4 = 668265263;
 var PRIME32_5 = 374761393;
 function rotl32(x, r) {
   return (x << r | x >>> 32 - r) >>> 0;
 }
 function read32LE(data, offset) {
-  return (data[offset] | data[offset + 1] << 8 | data[offset + 2] << 16 | data[offset + 3] << 24 >>> 0) >>> 0;
+  return (data[offset] | data[offset + 1] << 8 | data[offset + 2] << 16 | data[offset + 3] << 24) >>> 0;
+}
+function xxRound(acc, input) {
+  acc = acc + Math.imul(input, PRIME32_2) >>> 0;
+  acc = rotl32(acc, 13);
+  return Math.imul(acc, PRIME32_1) >>> 0;
 }
 function xxHash32(input, seed = 0) {
   const data = textEncoder.encode(input);
@@ -678,25 +683,13 @@ function xxHash32(input, seed = 0) {
     let v4 = seed - PRIME32_1 >>> 0;
     const limit = len - 16;
     while (index <= limit) {
-      let lane = read32LE(data, index);
-      v1 = v1 + (lane * PRIME32_2 >>> 0) >>> 0;
-      v1 = rotl32(v1, 13);
-      v1 = v1 * PRIME32_1 >>> 0;
+      v1 = xxRound(v1, read32LE(data, index));
       index += 4;
-      lane = read32LE(data, index);
-      v2 = v2 + (lane * PRIME32_2 >>> 0) >>> 0;
-      v2 = rotl32(v2, 13);
-      v2 = v2 * PRIME32_1 >>> 0;
+      v2 = xxRound(v2, read32LE(data, index));
       index += 4;
-      lane = read32LE(data, index);
-      v3 = v3 + (lane * PRIME32_2 >>> 0) >>> 0;
-      v3 = rotl32(v3, 13);
-      v3 = v3 * PRIME32_1 >>> 0;
+      v3 = xxRound(v3, read32LE(data, index));
       index += 4;
-      lane = read32LE(data, index);
-      v4 = v4 + (lane * PRIME32_2 >>> 0) >>> 0;
-      v4 = rotl32(v4, 13);
-      v4 = v4 * PRIME32_1 >>> 0;
+      v4 = xxRound(v4, read32LE(data, index));
       index += 4;
     }
     h32 = rotl32(v1, 1) + rotl32(v2, 7) + rotl32(v3, 12) + rotl32(v4, 18) >>> 0;
@@ -706,51 +699,111 @@ function xxHash32(input, seed = 0) {
   h32 = h32 + len >>> 0;
   while (index + 4 <= len) {
     const lane = read32LE(data, index);
-    h32 = h32 + (lane * PRIME32_3 >>> 0) >>> 0;
+    h32 = h32 + Math.imul(lane, PRIME32_3) >>> 0;
     h32 = rotl32(h32, 17);
-    h32 = h32 * PRIME32_4 >>> 0;
+    h32 = Math.imul(h32, PRIME32_4) >>> 0;
     index += 4;
   }
   while (index < len) {
-    h32 = h32 + data[index] * PRIME32_5 >>> 0;
+    h32 = h32 + Math.imul(data[index], PRIME32_5) >>> 0;
     h32 = rotl32(h32, 11);
-    h32 = h32 * PRIME32_1 >>> 0;
+    h32 = Math.imul(h32, PRIME32_1) >>> 0;
     index += 1;
   }
   h32 = (h32 ^ h32 >>> 15) >>> 0;
-  h32 = h32 * PRIME32_2 >>> 0;
+  h32 = Math.imul(h32, PRIME32_2) >>> 0;
   h32 = (h32 ^ h32 >>> 13) >>> 0;
-  h32 = h32 * PRIME32_3 >>> 0;
+  h32 = Math.imul(h32, PRIME32_3) >>> 0;
   h32 = (h32 ^ h32 >>> 16) >>> 0;
   return h32 >>> 0;
 }
 function computeLineHash(line) {
-  const line_clean = line.replace(/\r/g, "").trimEnd();
+  const line_clean = String(line).replace(/\r/g, "");
   const h = xxHash32(line_clean, 0);
   return bigrams_default[h % bigrams_default.length];
 }
-function formatHashLines(text, startLine = 1) {
+function formatHashLines(text, startLine = 1, options = {}) {
   const lines = text.split("\n");
-  return lines.map((line, i) => {
+  const body = lines.map((line, i) => {
     const h = computeLineHash(line);
     return `${startLine + i}${h}|${line}`;
   }).join("\n");
+  const header = options.filePath ? `#FILE:${options.filePath}\n` : "";
+  const suffix = options.suffix ? `\n${options.suffix}` : "";
+  return header + body + suffix;
 }
 function parseAnchor(raw) {
-  raw = raw.trimEnd();
-  const lastTwo = raw.slice(-2);
-  if (raw.length >= 3 && /^[a-z]{2}$/.test(lastTwo)) {
-    const lineStr = raw.slice(0, -2);
-    const line = parseInt(lineStr, 10);
-    if (!isNaN(line) && line >= 1) {
-      return { line, hash: lastTwo };
+  raw = raw.trim();
+  const withHash = raw.match(/^([1-9]\d*)([a-z]{2})$/);
+  if (withHash) {
+    return { line: parseInt(withHash[1], 10), hash: withHash[2] };
+  }
+  const withoutHash = raw.match(/^([1-9]\d*)$/);
+  if (withoutHash) {
+    return { line: parseInt(withoutHash[1], 10), hash: null };
+  }
+  throw new Error(`Invalid anchor: "${raw}" \u2014 must be lineNumber or lineNumber+2 lowercase letters`);
+}
+function isOpStart(line) {
+  return line.startsWith("\xBB") || line.startsWith("\xAB") || line.startsWith("\u2254") || /^([1-9]\d*(?:[a-z]{2})?)\s+(REPLACE|DELETE|INSERT_BEFORE|INSERT_AFTER)(?:\s|$)/.test(line.trim());
+}
+function splitInlinePayload(header, command) {
+  const token = ` ${command}`;
+  const idx = header.indexOf(token);
+  if (idx < 0) return null;
+  const anchorText = header.slice(0, idx).trim();
+  const rest = header.slice(idx + token.length);
+  if (rest === "") return { anchorText, inlinePayload: null };
+  if (!rest.startsWith(" ")) return null;
+  return { anchorText, inlinePayload: rest.slice(1) };
+}
+function parseReplaceHeader(rest) {
+  const deleteMatch = rest.match(/^(.*?)\s+DELETE\s*$/);
+  if (deleteMatch) {
+    const target = deleteMatch[1].trim();
+    if (target.includes("..")) {
+      const [start, end] = target.split("..");
+      return { kind: "delete", range: { start: parseAnchor(start), end: parseAnchor(end) }, inlinePayload: "" };
     }
+    return { kind: "delete", anchor: parseAnchor(target), inlinePayload: "" };
   }
-  const line = parseInt(raw, 10);
-  if (isNaN(line) || line < 1) {
-    throw new Error(`Invalid anchor: "${raw}" \u2014 must be lineNumber or lineNumber+2-char-bigram`);
+  const replace = splitInlinePayload(rest, "REPLACE");
+  const target = replace ? replace.anchorText : rest.trim();
+  const rangeParts = target.split("..");
+  const parsed = { kind: "replace", inlinePayload: replace ? replace.inlinePayload : null };
+  if (rangeParts.length === 2) {
+    parsed.range = { start: parseAnchor(rangeParts[0]), end: parseAnchor(rangeParts[1]) };
+  } else if (rangeParts.length === 1) {
+    parsed.anchor = parseAnchor(target);
+  } else {
+    throw new Error(`Invalid range anchor: "${target}"`);
   }
-  return { line, hash: null };
+  return parsed;
+}
+function parseCommandHeader(line) {
+  const source = line.replace(/^\s+/, "");
+  const match = source.match(/^([1-9]\d*(?:[a-z]{2})?)\s+(REPLACE|DELETE|INSERT_BEFORE|INSERT_AFTER)(?:\s(.*))?$/);
+  if (!match) return null;
+  const anchor = parseAnchor(match[1]);
+  const command = match[2];
+  const inlinePayload = match[3] ?? null;
+  if (command === "DELETE") return { kind: "delete", anchor, inlinePayload: "" };
+  if (command === "REPLACE") return { kind: "replace", anchor, inlinePayload };
+  if (command === "INSERT_BEFORE") return { kind: "insert_before", anchor, inlinePayload };
+  return { kind: "insert_after", anchor, inlinePayload };
+}
+function parseOpLine(line) {
+  const opMarker = line[0];
+  if (opMarker === "\xBB") {
+    return { kind: "insert_after", anchor: parseAnchor(line.slice(1).trim()), inlinePayload: null };
+  }
+  if (opMarker === "\xAB") {
+    return { kind: "insert_before", anchor: parseAnchor(line.slice(1).trim()), inlinePayload: null };
+  }
+  if (opMarker === "\u2254") {
+    return parseReplaceHeader(line.slice(1).replace(/^\s+/, ""));
+  }
+  return parseCommandHeader(line);
 }
 function parseHashlineEdit(input) {
   const blocks = [];
@@ -774,74 +827,23 @@ function parseHashlineEdit(input) {
       if (currentLine.startsWith("#FILE:")) {
         break;
       }
-      const opMarker = currentLine[0];
-      if (opMarker === "\xBB" || opMarker === "\xAB" || opMarker === "\u2254") {
-        const rest = currentLine.slice(1).trim();
-        let kind;
-        let anchor;
-        let range;
-        if (opMarker === "\xBB") {
-          kind = "insert_after";
-          anchor = parseAnchor(rest);
-        } else if (opMarker === "\xAB") {
-          kind = "insert_before";
-          anchor = parseAnchor(rest);
-        } else {
-          const rangeParts = rest.split("..");
-          let inlinePayload = null;
-          if (rangeParts.length === 2) {
-            kind = "replace";
-            const endPart = rangeParts[1];
-            const replaceIdx = endPart.indexOf(" REPLACE ");
-            if (replaceIdx >= 0) {
-              range = { start: parseAnchor(rangeParts[0].trim()), end: parseAnchor(endPart.substring(0, replaceIdx).trim()) };
-              inlinePayload = endPart.substring(replaceIdx + 9);
-            } else {
-              range = { start: parseAnchor(rangeParts[0].trim()), end: parseAnchor(endPart.trim()) };
-            }
-          } else {
-            const replaceIdx = rest.indexOf(" REPLACE ");
-            const deleteIdx = rest.indexOf(" DELETE");
-            if (replaceIdx >= 0) {
-              kind = "replace";
-              anchor = parseAnchor(rest.substring(0, replaceIdx).trim());
-              inlinePayload = rest.substring(replaceIdx + 9);
-            } else if (deleteIdx >= 0) {
-              kind = "replace";
-              anchor = parseAnchor(rest.substring(0, deleteIdx).trim());
-              inlinePayload = "";
-            } else {
-              kind = "replace";
-              anchor = parseAnchor(rest.trim());
-            }
-          }
-          if (inlinePayload !== null) {
-            i++;
-            if (range) ops.push({ kind, range, payload: inlinePayload });
-            else ops.push({ kind, anchor, payload: inlinePayload });
-            while (i < inputLines.length) {
-              const peek = inputLines[i];
-              if (peek.startsWith("#FILE:") || peek.startsWith("\xBB") || peek.startsWith("\xAB") || peek.startsWith("\u2254")) break;
-              i++;
-            }
-            continue;
-          }
-        }
+      const parsed = parseOpLine(currentLine);
+      if (parsed) {
         i++;
-        const payloadLines = [];
+        const payloadLines = parsed.inlinePayload !== null ? [parsed.inlinePayload] : [];
         while (i < inputLines.length) {
           const peek = inputLines[i];
-          if (peek.startsWith("#FILE:") || peek.startsWith("\xBB") || peek.startsWith("\xAB") || peek.startsWith("\u2254")) {
+          if (peek.startsWith("#FILE:") || isOpStart(peek)) {
             break;
           }
           payloadLines.push(peek);
           i++;
         }
-        const payload = payloadLines.join("\n");
-        if (range) {
-          ops.push({ kind, range, payload });
-        } else if (anchor) {
-          ops.push({ kind, anchor, payload });
+        const payload = parsed.kind === "delete" ? "" : payloadLines.join("\n");
+        if (parsed.range) {
+          ops.push({ kind: parsed.kind, range: parsed.range, payload });
+        } else if (parsed.anchor) {
+          ops.push({ kind: parsed.kind, anchor: parsed.anchor, payload });
         } else {
           throw new Error(`No anchor parsed for: "${currentLine}"`);
         }
@@ -858,12 +860,16 @@ function parseHashlineEdit(input) {
       `parseHashlineEdit expects exactly one #FILE: block, got ${blocks.length}`
     );
   }
+  if (!blocks[0].path) {
+    throw new Error("Hashline edit #FILE path is empty");
+  }
   return { path: blocks[0].path, ops: blocks[0].ops };
 }
-function validateAnchors(filePath, anchors) {
+function validateAnchors(filePath, anchors, options = {}) {
   const content = fs.readFileSync(filePath, "utf-8");
   const lines = content.split("\n");
   const staleLines = [];
+  const missingHashLines = [];
   for (const a of anchors) {
     const lineIdx = a.line - 1;
     const actualHash = computeLineHash(lineIdx < lines.length ? lines[lineIdx] : "");
@@ -871,14 +877,18 @@ function validateAnchors(filePath, anchors) {
       staleLines.push({ line: a.line, expectedHash: a.hash ?? "(none)", actualHash });
       continue;
     }
+    if (a.hash === null && options.allowHashless !== true) {
+      missingHashLines.push({ line: a.line, actualHash });
+      continue;
+    }
     if (a.hash !== null && a.hash !== actualHash) {
       staleLines.push({ line: a.line, expectedHash: a.hash, actualHash });
     }
   }
-  if (staleLines.length === 0) {
+  if (staleLines.length === 0 && missingHashLines.length === 0) {
     return { valid: true };
   }
-  return { valid: false, staleLines };
+  return { valid: false, staleLines, missingHashLines };
 }
 function collectAnchors(ops) {
   const out = [];
@@ -898,27 +908,119 @@ function sortOpsDesc(ops) {
     return lineB - lineA;
   });
 }
-function executeHashlineEdit(filePath, ops, root) {
-  const resolved = path.resolve(root ?? "", filePath);
+function isPathInside(candidate, root) {
+  const rel = path.relative(root, candidate);
+  return rel === "" || !!rel && !rel.startsWith("..") && !path.isAbsolute(rel);
+}
+function resolveWorkspaceFile(filePath, root) {
   if (root) {
-    const normalizedRoot = path.resolve(root) + path.sep;
-    if (!resolved.startsWith(normalizedRoot) && resolved !== path.resolve(root)) {
-      return { success: false, error: "Path traversal denied.", staleLines: [] };
+    const lexicalRoot = path.resolve(root);
+    const lexicalCandidate = path.resolve(lexicalRoot, filePath);
+    if (!isPathInside(lexicalCandidate, lexicalRoot)) {
+      return { ok: false, error: "Path traversal denied." };
     }
+    let realRoot;
+    let realCandidate;
+    try {
+      realRoot = fs.realpathSync.native(lexicalRoot);
+      realCandidate = fs.realpathSync.native(lexicalCandidate);
+    } catch (err) {
+      return { ok: false, error: `Unable to resolve file path: ${err instanceof Error ? err.message : String(err)}` };
+    }
+    if (!isPathInside(realCandidate, realRoot)) {
+      return { ok: false, error: "Path traversal denied." };
+    }
+    return { ok: true, path: realCandidate };
+  }
+  return { ok: true, path: path.resolve(filePath) };
+}
+function validateOperations(ops, options = {}) {
+  if (!Array.isArray(ops) || ops.length === 0) {
+    return { ok: false, error: "No hashline operations were provided." };
+  }
+  for (const op of ops) {
+    if (!["insert_before", "insert_after", "replace", "delete"].includes(op.kind)) {
+      return { ok: false, error: `Unknown operation kind: ${op.kind}` };
+    }
+    if (op.range && op.range.start.line > op.range.end.line) {
+      return { ok: false, error: `Invalid range ${op.range.start.line}..${op.range.end.line}: start must be <= end.` };
+    }
+    if ((op.kind === "insert_before" || op.kind === "insert_after" || op.kind === "replace") && op.payload === "") {
+      return { ok: false, error: `${op.kind} operation has an empty payload. Use DELETE for deletion.` };
+    }
+    for (const anchor of collectAnchors([op])) {
+      if (anchor.hash === null && options.allowHashless !== true) {
+        return { ok: false, error: `Missing hash for line ${anchor.line}. Re-read the file and use the line hash, or set unsafe_line_only=true explicitly.` };
+      }
+    }
+  }
+  return { ok: true };
+}
+function splitFileLines(content) {
+  const newline = content.includes("\r\n") ? "\r\n" : "\n";
+  return { lines: content.replace(/\r\n/g, "\n").split("\n"), newline };
+}
+function writeFileAtomic(filePath, content, mode) {
+  const dir = path.dirname(filePath);
+  const base = path.basename(filePath);
+  const tmpPath = path.join(dir, `.${base}.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2)}.tmp`);
+  let fd;
+  try {
+    fd = fs.openSync(tmpPath, "wx", mode ?? 0o666);
+    fs.writeFileSync(fd, content, "utf-8");
+    fs.fsyncSync(fd);
+    fs.closeSync(fd);
+    fd = void 0;
+    if (mode !== void 0) fs.chmodSync(tmpPath, mode);
+    fs.renameSync(tmpPath, filePath);
+    try {
+      const dirFd = fs.openSync(dir, "r");
+      try {
+        fs.fsyncSync(dirFd);
+      } finally {
+        fs.closeSync(dirFd);
+      }
+    } catch {
+    }
+  } catch (err) {
+    if (fd !== void 0) {
+      try {
+        fs.closeSync(fd);
+      } catch {
+      }
+    }
+    try {
+      fs.unlinkSync(tmpPath);
+    } catch {
+    }
+    throw err;
+  }
+}
+function executeHashlineEdit(filePath, ops, root, options = {}) {
+  const resolvedFile = resolveWorkspaceFile(filePath, root);
+  if (!resolvedFile.ok) {
+    return { success: false, error: resolvedFile.error, staleLines: [], missingHashLines: [] };
+  }
+  const resolved = resolvedFile.path;
+  const shape = validateOperations(ops, { allowHashless: options.allowHashless === true });
+  if (!shape.ok) {
+    return { success: false, error: shape.error, staleLines: [], missingHashLines: [] };
   }
   const anchors = collectAnchors(ops);
   if (anchors.length > 0) {
-    const validation = validateAnchors(resolved, anchors);
+    const validation = validateAnchors(resolved, anchors, { allowHashless: options.allowHashless === true });
     if (!validation.valid) {
       return {
         success: false,
-        error: "Hashline anchors do not match the current file content \u2014 the file may have changed since the last read.",
-        staleLines: validation.staleLines
+        error: validation.missingHashLines?.length ? "Hashline anchors require hashes by default." : "Hashline anchors do not match the current file content \u2014 the file may have changed since the last read.",
+        staleLines: validation.staleLines ?? [],
+        missingHashLines: validation.missingHashLines ?? []
       };
     }
   }
   const content = fs.readFileSync(resolved, "utf-8");
-  const lines = content.split("\n");
+  const { lines, newline } = splitFileLines(content);
+  const stat = fs.statSync(resolved);
   const sorted = sortOpsDesc(ops);
   for (const op of sorted) {
     const payloadLines = op.payload === "" ? [] : op.payload.split("\n");
@@ -938,26 +1040,41 @@ function executeHashlineEdit(filePath, ops, root) {
         const idx = op.anchor.line - 1;
         lines.splice(idx, 1, ...payloadLines);
       }
+    } else if (op.kind === "delete") {
+      if (op.range) {
+        const startIdx = op.range.start.line - 1;
+        const endIdx = op.range.end.line - 1;
+        const removeCount = endIdx - startIdx + 1;
+        lines.splice(startIdx, removeCount);
+      } else {
+        const idx = op.anchor.line - 1;
+        lines.splice(idx, 1);
+      }
     }
   }
-  const newContent = lines.join("\n");
-  const tmpPath = resolved + ".tmp";
-  fs.writeFileSync(tmpPath, newContent, "utf-8");
-  fs.renameSync(tmpPath, resolved);
+  const newContent = lines.join(newline);
+  writeFileAtomic(resolved, newContent, stat.mode);
   return {
     success: true,
     summary: `\u6210\u529F\u5957\u7528 ${ops.length} \u7B46\u7DE8\u8F2F\u81F3 ${filePath}`
   };
 }
-function formatStaleLinesReport(staleLines) {
-  if (staleLines.length === 0) return "\u6C92\u6709\u767C\u73FE stale \u884C\u3002";
-  const header = `\u26A0\uFE0F \u767C\u73FE ${staleLines.length} \u884C hash \u4E0D\u5339\u914D\uFF08\u6A94\u6848\u53EF\u80FD\u5DF2\u88AB\u5916\u90E8\u4FEE\u6539\uFF09\uFF1A
+function formatStaleLinesReport(staleLines = [], missingHashLines = []) {
+  if (staleLines.length === 0 && missingHashLines.length === 0) return "\u6C92\u6709\u767C\u73FE stale \u884C\u3002";
+  const sections = [];
+  if (missingHashLines.length > 0) {
+    sections.push(`\u26A0\uFE0F \u6709 ${missingHashLines.length} \u884C\u7F3A\u5C11 hash\uFF08\u9810\u8A2D\u62D2\u7D55 hashless \u7DE8\u8F2F\uFF09\uFF1A
+${missingHashLines.map((s) => `  - \u7B2C ${s.line} \u884C\uFF1A\u76EE\u524D hash\u300C${s.actualHash}\u300D`).join("\n")}`);
+  }
+  if (staleLines.length > 0) {
+    const header = `\u26A0\uFE0F \u767C\u73FE ${staleLines.length} \u884C hash \u4E0D\u5339\u914D\uFF08\u6A94\u6848\u53EF\u80FD\u5DF2\u88AB\u5916\u90E8\u4FEE\u6539\uFF09\uFF1A
 `;
-  const rows = staleLines.map((s) => {
-    return `  - \u7B2C ${s.line} \u884C\uFF1A\u9810\u671F hash\u300C${s.expectedHash}\u300D\uFF0C\u5BE6\u969B hash\u300C${s.actualHash}\u300D`;
-  });
-  const footer = "\n\n\u8ACB\u91CD\u65B0\u8B80\u53D6\u6A94\u6848\u53D6\u5F97\u6700\u65B0 hash \u5F8C\u518D\u8A66\u3002";
-  return header + rows.join("\n") + footer;
+    const rows = staleLines.map((s) => {
+      return `  - \u7B2C ${s.line} \u884C\uFF1A\u9810\u671F hash\u300C${s.expectedHash}\u300D\uFF0C\u5BE6\u969B hash\u300C${s.actualHash}\u300D`;
+    });
+    sections.push(header + rows.join("\n"));
+  }
+  return sections.join("\n\n") + "\n\n\u8ACB\u91CD\u65B0\u8B80\u53D6\u6A94\u6848\u53D6\u5F97\u6700\u65B0 hash \u5F8C\u518D\u8A66\u3002";
 }
 export {
   computeLineHash,

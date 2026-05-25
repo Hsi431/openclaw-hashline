@@ -16,21 +16,44 @@
 
 ✅ 用 Hashline 之後：
 → AI 說「改第 42 行」→ 系統自動驗證那行沒被改過 → 直接修好
-→ 一次就過。token 省 30-60%。
+→ 一次就過。本 repo 的可重跑 benchmark 中，edit payload 約省 36.6%。
 ```
 
 ## Benchmark
 
-用 OpenClaw 原始碼（`src/agents/*.ts`）10 個檔案、20 次長行編輯（40-200 字元的程式碼行）：
+本 repo 內建可重跑 benchmark：
 
-| 方法 | 成功率 | token 用量 | 省下 |
-|------|--------|-----------|------|
-| 傳統 `edit`（search_replace） | 100% | 3,961 | — |
-| **Hashline**（行號編輯） | 100% | 2,129 | **-46.3%** |
+```bash
+npm run benchmark
+```
 
-為什麼省這麼多？傳統 `edit` 要求 AI 重複輸入整行舊內容才能定位編輯位置。Hashline 只需要行號 — 舊行內容完全不進 prompt。
+設計：
+
+- 樣本：本 repo 內 6 個程式/測試/設定檔
+- 任務：20 次單行 replace，目標行長 40-200 字元
+- 比較：傳統 `search_replace` 需要帶 `old_string`；Hashline 只帶行號 + 2 字元 hash
+- 指標：只量 edit tool-call payload，不包含完整模型上下文；approx tokens = `ceil(chars / 4)`，不是模型供應商的計費 tokenizer
+
+2026-05-25 本機執行結果：
+
+| 方法 | 成功率 | payload chars | approx tokens | 省下 |
+|------|--------|---------------|---------------|------|
+| 傳統 `search_replace`（精確舊行） | 20/20 | 4,549 | 約 1,138 | — |
+| **Hashline**（行號 + hash） | 20/20 | 2,884 | 約 721 | **-36.6%** |
+
+為什麼省這麼多？傳統 `edit` 要求 AI 重複輸入整行舊內容才能定位編輯位置。Hashline 只需要行號 + 2 字元 hash — 舊行內容完全不進 prompt。
 
 省下的 token 可以讓 AI 多改幾行、多想幾步，同樣的 context window 做更多事。
+
+同一個 benchmark 也測 stale 情境：
+
+| stale 情境 | 結果 |
+|------------|------|
+| Hashline 帶 hash | 20/20 拒絕 stale edit |
+| Hashline `unsafe_line_only` | 20/20 會覆蓋 stale 行 |
+| 傳統 `search_replace` 精確舊行 | 20/20 因舊內容不匹配而拒絕 |
+
+這表示 Hashline 的主要收益不是本地檔案寫入速度，而是「較短的 edit payload」和「不用重打舊行也能驗證 stale」。本地 apply time 會受 atomic write / fsync 影響，不適合拿來當模型工作效率指標。
 
 ## 安裝
 
@@ -54,30 +77,42 @@ npm install openclaw-hashline
 
 ## 使用
 
-讀檔後直接用行號編輯，不用背內容：
+讀檔後，下一輪 transcript 會留下可直接使用的 hashline 區塊：
 
 ```
 #FILE:src/app.ts
-≔42 REPLACE const greeting = "你好";
-»17
-console.log("added after line 17");
-≔99 DELETE
+42ab|const greeting = "hello";
+43cd|console.log(greeting);
 ```
 
-如果你能看到 hash（sub-agent、後續回合），也可以這樣：
+用 `hashline_edit` 時保留 `#FILE:`，再用行號 + 2 字元 hash 錨定修改：
 
 ```
-≔42a3 REPLACE const greeting = "你好";
+#FILE:src/app.ts
+≔42ab REPLACE const greeting = "你好";
+»43cd
+console.log("added after line 43");
+≔43cd DELETE
+```
+
+也支援範圍取代：
+
+```
+#FILE:src/app.ts
+≔10aa..15bb
+// replacement block
 ```
 
 hash 不匹配 → 系統會拒絕編輯並告訴你哪幾行變了，不會改錯。
+
+如果你只有行號、沒有 hash，可以顯式設定 `unsafe_line_only: true` 使用 hashless 模式；這會繞過 stale-line protection，預設不允許。
 
 ## 適用場景
 
 **✅ 適合：**
 
 - 修改既有檔案 — 這是 coding agent 最常做的事
-- 跨多檔編輯 — 每個檔案重複用 hash，累積省下的 token 可觀
+- 跨多檔工作 — 每次 `hashline_edit` 修改一個 `#FILE`，多檔案可分次套用，累積省下的 token 可觀
 - Sub-agent / 多回合對話 — hashline 輸出會留在 transcript，後續回合自動受益
 
 **❌ 不適合：**
@@ -98,10 +133,11 @@ hash 不匹配 → 系統會拒絕編輯並告訴你哪幾行變了，不會改�
 
 ## 安全性
 
-- 所有編輯限制在 workspace 內（防路徑遍歷攻擊）
-- 雙層路徑驗證
-- Atomic write（防 partial write）
-- 31 個自動化測試全過
+- 所有編輯限制在 OpenClaw 提供的 workspace 內
+- lexical path + realpath 雙層驗證，阻擋 `..` 與 symlink directory escape
+- Hash anchors 預設必填，避免行號 stale 後靜默改錯
+- Atomic write（唯一暫存檔 + rename，防 partial write）
+- `npm test` 覆蓋 parser、stale hash、hashless unsafe、symlink escape、range validation、read hook
 
 ## 授權
 

@@ -4,10 +4,16 @@
   "description": "讓 AI agent 改檔案時不再打錯字、改錯行 — 行級內容 hash 編輯 plugin for OpenClaw",
   "type": "module",
   "main": "index.js",
+  "scripts": {
+    "benchmark": "node benchmark/hashline-benchmark.js",
+    "test": "node test/hashline.test.js"
+  },
   "files": [
     "index.js",
     "pi-tools.hashline.js",
     "hashline-prompt.js",
+    "benchmark/hashline-benchmark.js",
+    "test/hashline.test.js",
     "data/bigrams.json",
     "openclaw.plugin.json"
   ],
